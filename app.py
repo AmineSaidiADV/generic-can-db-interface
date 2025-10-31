@@ -4,6 +4,7 @@ import threading
 from pathlib import Path
 import time
 from typing import Any, Dict, List, Optional
+from queue import Queue, Empty
 
 import pandas as pd
 import streamlit as st
@@ -35,6 +36,29 @@ if "connected" not in st.session_state:
     st.session_state.connected = False
 if "lock" not in st.session_state:
     st.session_state.lock = threading.Lock()
+
+# Thread-safe queue to receive decoded frames from CAN background thread
+_rx_queue: "Queue[tuple[str, float, Dict[str, Any]]]" = Queue(maxsize=10000)
+
+def _drain_rx_queue() -> int:
+    """Move decoded frames from the background queue into session state.
+
+    Returns number of messages drained.
+    """
+    count = 0
+    try:
+        while True:
+            name, ts, signals = _rx_queue.get_nowait()
+            # Update last-seen table
+            st.session_state.rx_last[name] = {"time": ts, **signals}
+            # Add to plot buffer
+            for sname, val in signals.items():
+                if isinstance(val, (int, float)):
+                    st.session_state.plot_buf.add(f"{name}.{sname}", ts, float(val))
+            count += 1
+    except Empty:
+        pass
+    return count
 
 
 # --- Helpers to bridge cantools with backend ---
@@ -117,13 +141,12 @@ with st.sidebar:
             return
 
         def on_decoded(msg_name: str, ts: float, signals: Dict[str, Any]):
-            with st.session_state.lock:
-                st.session_state.rx_last[msg_name] = {"time": ts, **signals}
-                # Add to plot buffer with fully-qualified signal names
-                for sname, val in signals.items():
-                    fq = f"{msg_name}.{sname}"
-                    if isinstance(val, (int, float)):
-                        st.session_state.plot_buf.add(fq, ts, float(val))
+            # From background thread: do not touch Streamlit session_state directly
+            try:
+                _rx_queue.put_nowait((msg_name, ts, signals))
+            except Exception:
+                # Drop if queue is full; better to miss data than block thread
+                pass
 
         be.on_decoded(on_decoded)
         st.session_state.connected = True
@@ -211,6 +234,8 @@ with producer_tab:
 
 with monitor_tab:
     st.subheader("Monitor decoded messages")
+    # Pull any newly decoded frames into session state
+    _drain_rx_queue()
     hide_producer = st.checkbox("Hide producer messages", value=True)
     rx_last = st.session_state.rx_last
     if rx_last:
