@@ -50,6 +50,9 @@ class CANBackend:
         if self._bus is not None:
             self.disconnect()
         kwargs: Dict[str, Any] = {"interface": interface, "channel": channel}
+        if interface == "socketcan":
+            # Ensure we can also receive frames we transmit ourselves on socketcan
+            kwargs["receive_own_messages"] = True
         if bitrate is not None and interface != "socketcan":
             # For socketcan on Linux, bitrate is configured at OS level; ignore here.
             kwargs["bitrate"] = bitrate

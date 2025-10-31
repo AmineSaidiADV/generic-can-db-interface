@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import threading
 from pathlib import Path
+import time
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
@@ -48,18 +49,16 @@ def _make_db_interfaces(db: KCDDatabase):
 
         return Message(arbitration_id=msg.frame_id, data=data, is_extended_id=msg.is_extended_frame)
 
-    frame_id_map = {m.frame_id: m for m in can_db.messages}
-
     def id_to_name(frame_id: int) -> Optional[str]:
-        m = frame_id_map.get(frame_id)
-        return m.name if m else None
+        try:
+            m = can_db.get_message_by_frame_id(frame_id)
+            return m.name
+        except Exception:
+            return None
 
     def decode(frame_id: int, data: bytes) -> Optional[Dict[str, Any]]:
         try:
-            m = frame_id_map.get(frame_id)
-            if not m:
-                return None
-            return m.decode(data)
+            return can_db.decode_message(frame_id, data)
         except Exception:
             return None
 
@@ -71,7 +70,8 @@ with st.sidebar:
     st.header("Setup")
     kcd_path = st.text_input(
         "KCD path",
-        value=str(Path(__file__).parent / "../CAN_Databases/Advantics_Generic_EVSE_protocol_v2.kcd"),
+        value=st.session_state.get("kcd_path", ""),
+        key="kcd_path",
         help="Absolute or relative path to a .kcd file",
     )
     col_db = st.columns(2)
@@ -81,6 +81,15 @@ with st.sidebar:
             st.session_state.db = db
             st.session_state.node = None
             st.success(f"Loaded DB: {db.source_path.name}")
+            # If already connected, refresh backend enc/dec mapping to this DB
+            if st.session_state.connected:
+                try:
+                    be: CANBackend = st.session_state.backend
+                    enc, dec, id2name = _make_db_interfaces(st.session_state.db)
+                    be.set_db_interfaces(enc, dec, id2name)
+                    st.info("Updated CAN backend to use the newly loaded database.")
+                except Exception as e:
+                    st.warning(f"Connected, but failed updating backend to new DB: {e}")
         except Exception as e:
             st.error(f"Failed to load DB: {e}")
 
@@ -175,13 +184,20 @@ with producer_tab:
                         st.warning("Connect to a CAN interface first.")
                     else:
                         be: CANBackend = st.session_state.backend
-                        if period_ms <= 0:
-                            be.send_once(selected, values)
-                            st.success("Sent once")
-                        else:
-                            key = be.start_periodic(selected, values, int(period_ms))
-                            st.session_state.periodic[key] = {"msg": selected, "period_ms": int(period_ms), "values": values}
-                            st.success(f"Started periodic: {key}")
+                        try:
+                            if period_ms <= 0:
+                                be.send_once(selected, values)
+                                st.success("Sent once")
+                            else:
+                                key = be.start_periodic(selected, values, int(period_ms))
+                                st.session_state.periodic[key] = {
+                                    "msg": selected,
+                                    "period_ms": int(period_ms),
+                                    "values": values,
+                                }
+                                st.success(f"Started periodic: {key}")
+                        except Exception as e:
+                            st.error(f"Failed to send '{selected}': {e}")
             if st.session_state.periodic:
                 st.write("Active periodic sends:")
                 for key, info in list(st.session_state.periodic.items()):
@@ -232,3 +248,16 @@ with monitor_tab:
         st.info("No data yet for selected signals.")
     else:
         st.line_chart(df, use_container_width=True, height=300)
+
+# Optional auto-refresh to update monitor without manual interaction
+with st.sidebar:
+    if st.session_state.connected:
+        st.divider()
+        st.subheader("Refresh")
+        auto_refresh = st.checkbox("Auto-refresh monitor", value=True, key="auto_refresh")
+        interval_ms = st.number_input("Interval (ms)", min_value=200, max_value=5000, value=1000, step=100)
+        if auto_refresh:
+            # Sleep briefly and rerun to pull latest RX data added by background thread
+            time.sleep(float(interval_ms) / 1000.0)
+            # Streamlit modern API uses st.rerun(); experimental_rerun was removed in some versions
+            st.rerun()
