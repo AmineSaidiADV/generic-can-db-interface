@@ -9,6 +9,7 @@ import can
 
 
 DecodedCallback = Callable[[str, float, Dict[str, Any]], None]
+RawCallback = Callable[[int, bytes, float, bool], None]
 
 
 @dataclass
@@ -30,6 +31,7 @@ class CANBackend:
         self._bus: Optional[can.BusABC] = None
         self._notifier: Optional[can.Notifier] = None
         self._rx_callback: Optional[DecodedCallback] = None
+        self._raw_callback: Optional[RawCallback] = None
         self._periodic: Dict[str, PeriodicTask] = {}
         self._lock = threading.Lock()
         self._db_encode: Optional[Callable[[str, Dict[str, Any]], can.Message]] = None
@@ -73,6 +75,9 @@ class CANBackend:
 
     def on_decoded(self, callback: DecodedCallback) -> None:
         self._rx_callback = callback
+
+    def on_raw(self, callback: RawCallback) -> None:
+        self._raw_callback = callback
 
     def is_connected(self) -> bool:
         return self._bus is not None
@@ -126,6 +131,14 @@ class CANBackend:
             stop_ev.wait(delay)
 
     def _on_raw_message(self, msg: can.Message) -> None:
+        # Always forward raw frames first
+        rcb = self._raw_callback
+        if rcb:
+            try:
+                rcb(msg.arbitration_id, bytes(msg.data), time.time(), bool(msg.is_extended_id))
+            except Exception:
+                pass
+
         if not (self._db_decode and self._id_to_name):
             return
         name = self._id_to_name(msg.arbitration_id)

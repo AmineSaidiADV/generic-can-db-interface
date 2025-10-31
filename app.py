@@ -39,6 +39,7 @@ if "lock" not in st.session_state:
 
 # Thread-safe queue to receive decoded frames from CAN background thread
 _rx_queue: "Queue[tuple[str, float, Dict[str, Any]]]" = Queue(maxsize=10000)
+_raw_queue: "Queue[tuple[int, bytes, float, bool]]" = Queue(maxsize=10000)
 
 def _drain_rx_queue() -> int:
     """Move decoded frames from the background queue into session state.
@@ -58,6 +59,30 @@ def _drain_rx_queue() -> int:
             count += 1
     except Empty:
         pass
+    return count
+
+def _drain_raw_queue(max_keep: int = 500) -> int:
+    count = 0
+    raw_list = st.session_state.get("rx_raw", [])
+    try:
+        while True:
+            arb_id, data, ts, is_ext = _raw_queue.get_nowait()
+            raw_list.append(
+                {
+                    "time": ts,
+                    "can_id": f"0x{arb_id:X}",
+                    "extended": is_ext,
+                    "dlc": len(data),
+                    "data": data.hex(" "),
+                }
+            )
+            count += 1
+    except Empty:
+        pass
+    # Keep bounded size
+    if len(raw_list) > max_keep:
+        raw_list = raw_list[-max_keep:]
+    st.session_state.rx_raw = raw_list
     return count
 
 
@@ -149,6 +174,13 @@ with st.sidebar:
                 pass
 
         be.on_decoded(on_decoded)
+        # Raw frames handler
+        def on_raw(arb_id: int, data: bytes, ts: float, is_ext: bool):
+            try:
+                _raw_queue.put_nowait((arb_id, data, ts, is_ext))
+            except Exception:
+                pass
+        be.on_raw(on_raw)
         st.session_state.connected = True
 
     def disconnect():
@@ -235,7 +267,8 @@ with producer_tab:
 with monitor_tab:
     st.subheader("Monitor decoded messages")
     # Pull any newly decoded frames into session state
-    _drain_rx_queue()
+    dec = _drain_rx_queue()
+    raw = _drain_raw_queue()
     hide_producer = st.checkbox("Hide producer messages", value=True)
     rx_last = st.session_state.rx_last
     if rx_last:
@@ -273,6 +306,14 @@ with monitor_tab:
         st.info("No data yet for selected signals.")
     else:
         st.line_chart(df, use_container_width=True, height=300)
+
+    with st.expander("Raw frames (last 500)"):
+        raw_rows = st.session_state.get("rx_raw", [])
+        if raw_rows:
+            rdf = pd.DataFrame(raw_rows).sort_values("time", ascending=False)
+            st.dataframe(rdf, use_container_width=True, height=240)
+        else:
+            st.caption("No raw frames captured yet.")
 
 # Optional auto-refresh to update monitor without manual interaction
 with st.sidebar:
