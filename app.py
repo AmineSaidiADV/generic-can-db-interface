@@ -151,6 +151,25 @@ with st.sidebar:
     iface = st.selectbox("Interface", ["socketcan", "pcan", "kvaser"], index=0)
     channel = st.text_input("Channel", value="vcan0")
     bitrate = st.number_input("Bitrate (non-socketcan)", min_value=1000, max_value=1000000, value=500000, step=1000)
+    with st.expander("Advanced: CAN filters"):
+        st.caption("Optional hardware filters in the form CAN_ID:MASK, comma-separated. Example: 0x600:0x7FF")
+        filt_text = st.text_input("Filters", value=st.session_state.get("can_filters_text", ""), key="can_filters_text")
+        def parse_filters(txt: str):
+            items = []
+            for part in txt.split(","):
+                part = part.strip()
+                if not part:
+                    continue
+                if ":" in part:
+                    cid, mask = part.split(":", 1)
+                else:
+                    cid, mask = part, "0x7FF"
+                try:
+                    items.append({"can_id": int(cid, 0), "can_mask": int(mask, 0)})
+                except ValueError:
+                    pass
+            return items or None
+        can_filters = parse_filters(filt_text)
 
     def connect():
         if not st.session_state.db:
@@ -160,7 +179,12 @@ with st.sidebar:
         enc, dec, id2name = _make_db_interfaces(st.session_state.db)
         be.set_db_interfaces(enc, dec, id2name)
         try:
-            be.connect(interface=iface, channel=channel, bitrate=None if iface == "socketcan" else int(bitrate))
+            be.connect(
+                interface=iface,
+                channel=channel,
+                bitrate=None if iface == "socketcan" else int(bitrate),
+                can_filters=can_filters,
+            )
         except Exception as e:
             st.error(f"Failed to connect: {e}")
             return
@@ -194,6 +218,8 @@ with st.sidebar:
     else:
         if c2.button("Disconnect"):
             disconnect()
+        if can_filters is not None and st.button("Apply filters"):
+            st.session_state.backend.set_filters(can_filters)
 
 
 # --- Main: Tabs ---
@@ -269,6 +295,9 @@ with monitor_tab:
     # Pull any newly decoded frames into session state
     dec = _drain_rx_queue()
     raw = _drain_raw_queue()
+    cxa, cxb, cxc = st.columns(3)
+    cxa.metric("Decoded frames (this refresh)", dec)
+    cxb.metric("Raw frames (this refresh)", raw)
     hide_producer = st.checkbox("Hide producer messages", value=True)
     rx_last = st.session_state.rx_last
     if rx_last:

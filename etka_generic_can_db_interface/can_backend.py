@@ -48,7 +48,13 @@ class CANBackend:
         self._db_decode = decode
         self._id_to_name = id_to_name
 
-    def connect(self, interface: str, channel: str, bitrate: Optional[int] = None) -> None:
+    def connect(
+        self,
+        interface: str,
+        channel: str,
+        bitrate: Optional[int] = None,
+        can_filters: Optional[list[dict[str, int]]] = None,
+    ) -> None:
         if self._bus is not None:
             self.disconnect()
         kwargs: Dict[str, Any] = {"interface": interface, "channel": channel}
@@ -58,9 +64,18 @@ class CANBackend:
         if bitrate is not None and interface != "socketcan":
             # For socketcan on Linux, bitrate is configured at OS level; ignore here.
             kwargs["bitrate"] = bitrate
+        if can_filters is not None:
+            kwargs["can_filters"] = can_filters
         self._bus = can.Bus(**kwargs)
         listener = _RxListener(self._on_raw_message)
         self._notifier = can.Notifier(self._bus, [listener], 0.01)
+
+    def set_filters(self, can_filters: Optional[list[dict[str, int]]]) -> None:
+        if self._bus and hasattr(self._bus, "set_filters"):
+            try:
+                self._bus.set_filters(can_filters)  # type: ignore[attr-defined]
+            except Exception:
+                pass
 
     def disconnect(self) -> None:
         with self._lock:
