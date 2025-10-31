@@ -151,25 +151,8 @@ with st.sidebar:
     iface = st.selectbox("Interface", ["socketcan", "pcan", "kvaser"], index=0)
     channel = st.text_input("Channel", value="vcan0")
     bitrate = st.number_input("Bitrate (non-socketcan)", min_value=1000, max_value=1000000, value=500000, step=1000)
-    with st.expander("Advanced: CAN filters"):
-        st.caption("Optional hardware filters in the form CAN_ID:MASK, comma-separated. Example: 0x600:0x7FF")
-        filt_text = st.text_input("Filters", value=st.session_state.get("can_filters_text", ""), key="can_filters_text")
-        def parse_filters(txt: str):
-            items = []
-            for part in txt.split(","):
-                part = part.strip()
-                if not part:
-                    continue
-                if ":" in part:
-                    cid, mask = part.split(":", 1)
-                else:
-                    cid, mask = part, "0x7FF"
-                try:
-                    items.append({"can_id": int(cid, 0), "can_mask": int(mask, 0)})
-                except ValueError:
-                    pass
-            return items or None
-        can_filters = parse_filters(filt_text)
+    use_filters = st.checkbox("Apply CAN filters (only DB messages)", value=True, 
+                              help="When enabled, only receive CAN IDs defined in the loaded database. Disable to receive all CAN traffic.")
 
     def connect():
         if not st.session_state.db:
@@ -179,11 +162,27 @@ with st.sidebar:
         enc, dec, id2name = _make_db_interfaces(st.session_state.db)
         be.set_db_interfaces(enc, dec, id2name)
         try:
+            # Build hardware filters: allow all messages defined in the DB
+            # (regardless of whether they have declared producers/senders)
+            filters = None
+            if use_filters:
+                filters = []
+                try:
+                    for m in st.session_state.db.db.messages:  # type: ignore
+                        mask = 0x1FFFFFFF if m.is_extended_frame else 0x7FF
+                        filters.append({
+                            "can_id": int(m.frame_id),
+                            "can_mask": int(mask),
+                            "extended": bool(m.is_extended_frame),
+                        })
+                except Exception:
+                    filters = None  # type: ignore
+
             be.connect(
                 interface=iface,
                 channel=channel,
                 bitrate=None if iface == "socketcan" else int(bitrate),
-                can_filters=can_filters,
+                can_filters=filters,  # type: ignore[arg-type]
             )
         except Exception as e:
             st.error(f"Failed to connect: {e}")
@@ -218,8 +217,6 @@ with st.sidebar:
     else:
         if c2.button("Disconnect"):
             disconnect()
-        if can_filters is not None and st.button("Apply filters"):
-            st.session_state.backend.set_filters(can_filters)
 
 
 # --- Main: Tabs ---
