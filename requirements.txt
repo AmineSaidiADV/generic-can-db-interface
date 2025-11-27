@@ -2,3 +2,4 @@ streamlit>=1.33
 cantools>=38.0.2
 python-can>=4.3
 pandas>=2.2
+plotly>=5.22

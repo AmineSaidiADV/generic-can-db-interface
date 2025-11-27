@@ -37,6 +37,8 @@ class CANBackend:
         self._db_encode: Optional[Callable[[str, Dict[str, Any]], can.Message]] = None
         self._db_decode: Optional[Callable[[int, bytes], Dict[str, Any] | None]] = None
         self._id_to_name: Optional[Callable[[int], Optional[str]]] = None
+        # Cache last raw data per CAN ID to skip redundant decodes
+        self._last_raw_data: Dict[int, bytes] = {}
 
     def set_db_interfaces(
         self,
@@ -66,6 +68,7 @@ class CANBackend:
             kwargs["bitrate"] = bitrate
         if can_filters is not None:
             kwargs["can_filters"] = can_filters
+        
         self._bus = can.Bus(**kwargs)
         listener = _RxListener(self._on_raw_message)
         self._notifier = can.Notifier(self._bus, [listener], 0.01)
@@ -156,15 +159,34 @@ class CANBackend:
 
         if not (self._db_decode and self._id_to_name):
             return
+        
         name = self._id_to_name(msg.arbitration_id)
         if name is None:
             return
-        decoded = self._db_decode(msg.arbitration_id, msg.data)
+        
+        # Optimization: Check if raw data has changed since last message
+        # Only decode if data is different (saves CPU and memory for repeated messages)
+        msg_data = bytes(msg.data)
+        last_data = self._last_raw_data.get(msg.arbitration_id)
+        
+        if last_data == msg_data:
+            # Data unchanged, skip decode (common for heartbeat/status messages)
+            return
+        
+        # Update cache with new data
+        self._last_raw_data[msg.arbitration_id] = msg_data
+        
+        # Decode only when data changed
+        decoded = self._db_decode(msg.arbitration_id, msg_data)
         if decoded is None:
             return
+        
         cb = self._rx_callback
         if cb:
-            cb(name, time.time(), decoded)
+            try:
+                cb(name, time.time(), decoded)
+            except Exception:
+                pass
 
 
 class _RxListener(can.Listener):
