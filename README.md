@@ -1,4 +1,4 @@
-# ETKA Generic CAN DB Interface
+# Generic CAN DB Interface
 
 A user-friendly Streamlit app to load a CAN database (.kcd via cantools), configure and send messages for which a selected node is the producer, and visualize non-producer messages with live plots over time.
 
@@ -35,7 +35,7 @@ streamlit run app.py
 ```
 
 3. In the app:
-- Enter the path to a .kcd file (e.g. `../CAN_Databases/Advantics_Generic_EVSE_protocol_v2.kcd`)
+- Enter the path to a .kcd file (e.g. `../CAN_Databases/example.kcd`)
 - Choose your node (producer)
 - Configure CAN interface (e.g., interface: `socketcan`, channel: `vcan0`)
 - Connect and start sending/monitoring
