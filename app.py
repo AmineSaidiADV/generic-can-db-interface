@@ -10,9 +10,9 @@ from datetime import datetime
 import pandas as pd
 import streamlit as st
 
-from etka_generic_can_db_interface.can_backend import CANBackend
-from etka_generic_can_db_interface.db_loader import KCDDatabase, load_kcd
-from etka_generic_can_db_interface.plotting import TimeSeriesBuffer, build_signal_plot
+from generic_can_db_interface.can_backend import CANBackend
+from generic_can_db_interface.db_loader import KCDDatabase, load_kcd
+from generic_can_db_interface.plotting import TimeSeriesBuffer, build_signal_plot
 
 st.set_page_config(page_title="ETKA Generic CAN DB", layout="wide")
 
